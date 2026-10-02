@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: leetsync-backend
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: 8080
+
+app:
+  cors:
+    allowed-origin-patterns: "chrome-extension://*,http://localhost:3000,http://localhost:5173"
+  github:
+    api-base-url: "https://api.github.com"
+    user-agent: "LeetSync-Spring-Boot"
