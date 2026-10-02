@@ -58,20 +58,19 @@ public class GlobalExceptionHandler {
     ResponseEntity<?> handleValidation(
             MethodArgumentNotValidException ex
     ) {
-        String message = ex.getBindingResult()
+        Map<String, String> errors = new java.util.HashMap<>();
+
+        ex.getBindingResult()
                 .getFieldErrors()
-                .stream()
-                .findFirst()
-                .map(error ->
-                        error.getField() + ": " + error.getDefaultMessage()
-                )
-                .orElse("Invalid request");
+                .forEach(error ->
+                        errors.put(error.getField(), error.getDefaultMessage())
+                );
 
         return ResponseEntity.badRequest().body(Map.of(
                 "timestamp", Instant.now().toString(),
                 "status", 400,
                 "code", "VALIDATION_ERROR",
-                "message", message
+                "errors", errors
         ));
     }
 

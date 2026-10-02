@@ -1,8 +1,22 @@
 spring:
   application:
     name: leetsync-backend
+
   jackson:
     default-property-inclusion: non_null
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/leetsync
+    username: postgres
+    password: REMOVED
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
 
 server:
   port: 8080
@@ -10,6 +24,8 @@ server:
 app:
   cors:
     allowed-origin-patterns: "chrome-extension://*,http://localhost:3000,http://localhost:5173"
+
   github:
     api-base-url: "https://api.github.com"
     user-agent: "LeetSync-Spring-Boot"
+    default-branch: "main"

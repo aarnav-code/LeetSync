@@ -33,7 +33,7 @@ public class AppConfig implements WebMvcConfigurer {
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
                 .allowedOriginPatterns(allowedOriginPatterns)
-                .allowedMethods("GET", "POST", "OPTIONS")
+                .allowedMethods("GET", "POST", "OPTIONS", "DELETE", "PUT")
                 .allowedHeaders("*")
                 .allowCredentials(false)
                 .maxAge(3600);
