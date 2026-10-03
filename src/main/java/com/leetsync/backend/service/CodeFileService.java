@@ -29,18 +29,31 @@ public class CodeFileService {
 
     public String sanitize(String value) {
         return value.trim()
-                .replaceAll("[^a-zA-Z0-9._-]+", "-")
-                .replaceAll("-+", "-")
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
                 .replaceAll("^-|-$", "");
     }
 
+    public String problemDirectory(SubmissionRequest request) {
+        String number = request.problemId().replaceAll("\\D", "");
+
+        if (number.isBlank()) {
+            throw new IllegalArgumentException("Problem number is missing or invalid.");
+        }
+
+        String paddedNumber = String.format("%04d", Integer.parseInt(number));
+        String slug = sanitize(request.problemTitle());
+
+        return paddedNumber + "-" + slug;
+    }
+
     public String path(SubmissionRequest request) {
-        String platform = switch (request.source()) {
-            case LEETCODE -> "LeetCode";
-            case GEEKS_FOR_GEEKS -> "GeeksForGeeks";
-            case CODEFORCES -> "Codeforces";
-        };
-        return platform + "/" + sanitize(request.problemId()) + "-" + sanitize(request.problemTitle())
-                + "/solution." + extension(request.language());
+        return problemDirectory(request)
+                + "/solution."
+                + extension(request.language());
+    }
+
+    public String problemReadmePath(SubmissionRequest request) {
+        return problemDirectory(request) + "/README.md";
     }
 }

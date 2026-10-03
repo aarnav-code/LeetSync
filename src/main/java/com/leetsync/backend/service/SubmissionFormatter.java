@@ -29,7 +29,6 @@ public class SubmissionFormatter {
 
     /**
      * Extracts the actual source code from a LeetSync-formatted file.
-     *
      * The formatter puts all metadata at the beginning of the file,
      * followed by one blank line and then the original source code.
      */

@@ -25,6 +25,6 @@ class CodeFileServiceTest {
                 true
         );
 
-        assertEquals("LeetCode/1-Two-Sum/solution.java", service.path(request));
+        assertEquals("0001-two-sum/solution.java", service.path(request));
     }
 }
