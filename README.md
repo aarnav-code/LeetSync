@@ -1,3 +1,5 @@
-# My LeetCode Solutions
+# Solved LeetCode Problems
 
-Global stats: 1 Problem Solved
+└── 0001-two-sum
+    ├── solution.java
+    └── README.md
