@@ -13,3 +13,5 @@
     ├── solution.java
     └── README.md
 ```
+
+Global stats: 1 Problem Solved
