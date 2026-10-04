@@ -1,21 +1,21 @@
-
 package com.leetsync.backend.service;
 
 import com.leetsync.backend.dto.*;
+import com.leetsync.backend.exception.ApiException;
 import com.leetsync.backend.github.GitHubClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import com.leetsync.backend.exception.ApiException;
-
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -55,33 +55,15 @@ class GitHubSyncServiceTest {
         SubmissionRequest request =
                 request("1", "Two Sum", "class Solution {}");
 
-        when(githubClient.getFile(
-                eq(token), eq(owner), eq(repo),
-                contains("solution.java"), eq(branch)
-        )).thenReturn(null);
+        mockMissingSolutionAndProblemReadme();
 
-        when(githubClient.getFile(
-                eq(token), eq(owner), eq(repo),
-                argThat(path -> path != null
-                        && path.endsWith("/README.md")
-                        && !path.equals("README.md")),
-                eq(branch)
-        )).thenReturn(null);
-
-        when(githubClient.getFile(
-                eq(token), eq(owner), eq(repo),
-                eq("README.md"), eq(branch)
-        )).thenReturn(new GitHubContentsResponse(
+        mockRootReadme(
                 encode("# LeetSync\n\nMy project documentation.\n"),
                 "root-readme-sha",
                 "README.md"
-        ));
+        );
 
-        when(githubClient.putFile(
-                eq(token), eq(owner), eq(repo), anyString(), any()
-        )).thenReturn(new GitHubPutFileResponse(
-                new GitHubPutFileResponse.Commit("test-sha")
-        ));
+        mockSuccessfulWrites();
 
         SyncResponse response = service.sync(token, owner, request);
 
@@ -91,13 +73,20 @@ class GitHubSyncServiceTest {
                 eq(token), eq(owner), eq(repo), anyString(), any()
         );
 
+        verify(githubClient, times(1)).getFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), eq(branch)
+        );
+
         verify(githubClient).putFile(
                 eq(token), eq(owner), eq(repo),
                 eq("README.md"),
                 argThat(body -> {
                     String updated = decode(body.content());
                     return updated.contains("My project documentation.")
-                            && updated.contains("Global stats: 1 Problem Solved");
+                            && updated.contains(
+                            "Global stats: 1 Problem Solved"
+                    );
                 })
         );
     }
@@ -119,15 +108,12 @@ class GitHubSyncServiceTest {
                         && !path.equals("README.md")),
                 eq(branch)
         )).thenReturn(new GitHubContentsResponse(
-                encode("# 1. Two Sum"), "readme-sha",
+                encode("# 1. Two Sum"),
+                "readme-sha",
                 "0001-two-sum/README.md"
         ));
 
-        when(githubClient.putFile(
-                eq(token), eq(owner), eq(repo), anyString(), any()
-        )).thenReturn(new GitHubPutFileResponse(
-                new GitHubPutFileResponse.Commit("test-sha")
-        ));
+        mockSuccessfulWrites();
 
         SyncResponse response = service.sync(token, owner, request);
 
@@ -153,7 +139,9 @@ class GitHubSyncServiceTest {
                 eq(token), eq(owner), eq(repo),
                 contains("solution.java"), eq(branch)
         )).thenReturn(new GitHubContentsResponse(
-                encode(formattedCode), "solution-sha", "solution.java"
+                encode(formattedCode),
+                "solution-sha",
+                "solution.java"
         ));
 
         when(githubClient.getFile(
@@ -164,11 +152,7 @@ class GitHubSyncServiceTest {
                 eq(branch)
         )).thenReturn(null);
 
-        when(githubClient.putFile(
-                eq(token), eq(owner), eq(repo), anyString(), any()
-        )).thenReturn(new GitHubPutFileResponse(
-                new GitHubPutFileResponse.Commit("test-sha")
-        ));
+        mockSuccessfulWrites();
 
         SyncResponse response = service.sync(token, owner, request);
 
@@ -190,6 +174,193 @@ class GitHubSyncServiceTest {
         verify(githubClient, never()).putFile(
                 eq(token), eq(owner), eq(repo),
                 eq("README.md"), any()
+        );
+    }
+
+    @Test
+    void refusesToOverwriteRootReadmeWhenItCannotBeRead() {
+        SubmissionRequest request =
+                request("1", "Two Sum", "class Solution {}");
+
+        mockMissingSolutionAndProblemReadme();
+        mockRootReadme(null, null, null);
+
+        assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        verifyNoWrites();
+    }
+
+    @Test
+    void preservesRootReadmeDocumentationAndDirectoryTreeWhenUpdatingStats() {
+        SubmissionRequest request =
+                request("2", "Add Two Numbers", "class Solution {}");
+
+        String originalRootReadme = """
+                # LeetSync
+
+                Automatically sync coding solutions to GitHub.
+
+                ## Directory Structure
+
+                ```text
+                LeetCode Solutions/
+                ├── 0001-two-sum/
+                │   ├── solution.java
+                │   └── README.md
+                └── README.md
+                ```
+
+                Global stats: 1 Problem Solved
+
+                ## About
+
+                This project tracks my coding progress.
+                """;
+
+        mockMissingSolutionAndProblemReadme();
+
+        mockRootReadme(
+                encode(originalRootReadme),
+                "root-readme-sha",
+                "README.md"
+        );
+
+        mockSuccessfulWrites();
+
+        SyncResponse response = service.sync(token, owner, request);
+
+        assertEquals("CREATED", response.status());
+
+        String expectedRootReadme = originalRootReadme.replace(
+                "Global stats: 1 Problem Solved",
+                "Global stats: 2 Problems Solved"
+        );
+
+        verify(githubClient).putFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"),
+                argThat(body -> expectedRootReadme.equals(
+                        decode(body.content())
+                ))
+        );
+    }
+
+    @Test
+    void refusesToWriteWhenRootReadmeHasNoSha() {
+        SubmissionRequest request =
+                request("2", "Add Two Numbers", "class Solution {}");
+
+        mockMissingSolutionAndProblemReadme();
+
+        mockRootReadme(
+                encode("# LeetSync\n\nGlobal stats: 1 Problem Solved\n"),
+                null,
+                "README.md"
+        );
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        assertEquals("ROOT_README_READ_ERROR", exception.getCode());
+        assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatus());
+
+        verifyNoWrites();
+    }
+
+    @Test
+    void refusesToWriteWhenRootReadmePathIsUnexpected() {
+        SubmissionRequest request =
+                request("3", "Longest Substring", "class Solution {}");
+
+        mockMissingSolutionAndProblemReadme();
+
+        mockRootReadme(
+                encode("# Some other file"),
+                "some-file-sha",
+                "docs/README.md"
+        );
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        assertEquals("ROOT_README_READ_ERROR", exception.getCode());
+        assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatus());
+
+        verifyNoWrites();
+    }
+
+    @Test
+    void refusesToWriteWhenRootReadmeContentIsInvalidBase64() {
+        SubmissionRequest request =
+                request("4", "Median of Two Sorted Arrays", "class Solution {}");
+
+        mockMissingSolutionAndProblemReadme();
+
+        mockRootReadme(
+                "not-valid-base64!!!",
+                "root-readme-sha",
+                "README.md"
+        );
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        assertEquals("ROOT_README_READ_ERROR", exception.getCode());
+        assertEquals(HttpStatus.BAD_GATEWAY, exception.getStatus());
+
+        verifyNoWrites();
+    }
+
+    private void mockMissingSolutionAndProblemReadme() {
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                contains("solution.java"), eq(branch)
+        )).thenReturn(null);
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                argThat(path -> path != null
+                        && path.endsWith("/README.md")
+                        && !path.equals("README.md")),
+                eq(branch)
+        )).thenReturn(null);
+    }
+
+    private void mockRootReadme(
+            String content,
+            String sha,
+            String path
+    ) {
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), eq(branch)
+        )).thenReturn(
+                content == null && sha == null && path == null
+                        ? null
+                        : new GitHubContentsResponse(content, sha, path)
+        );
+    }
+
+    private void mockSuccessfulWrites() {
+        when(githubClient.putFile(
+                eq(token), eq(owner), eq(repo), anyString(), any()
+        )).thenReturn(new GitHubPutFileResponse(
+                new GitHubPutFileResponse.Commit("test-sha")
+        ));
+    }
+
+    private void verifyNoWrites() {
+        verify(githubClient, never()).putFile(
+                eq(token), eq(owner), eq(repo), anyString(), any()
         );
     }
 
@@ -228,42 +399,34 @@ class GitHubSyncServiceTest {
     }
 
     @Test
-    void refusesToOverwriteRootReadmeWhenItCannotBeRead() {
+    void propagatesGitHubWriteFailure() {
         SubmissionRequest request =
-                request("1", "Two Sum", "class Solution {}");
+                request("5", "Test Problem", "class Solution {}");
 
-        when(githubClient.getFile(
-                eq(token), eq(owner), eq(repo),
-                contains("solution.java"), eq(branch)
-        )).thenReturn(null);
+        mockMissingSolutionAndProblemReadme();
 
-        when(githubClient.getFile(
-                eq(token), eq(owner), eq(repo),
-                argThat(path -> path != null
-                        && path.endsWith("/README.md")
-                        && !path.equals("README.md")),
-                eq(branch)
-        )).thenReturn(null);
-
-        when(githubClient.getFile(
-                eq(token), eq(owner), eq(repo),
-                eq("README.md"), eq(branch)
-        )).thenReturn(null);
-
-        when(githubClient.putFile(
-                eq(token), eq(owner), eq(repo), anyString(), any()
-        )).thenReturn(new GitHubPutFileResponse(
-                new GitHubPutFileResponse.Commit("test-sha")
-        ));
-
-        assertThrows(
-                ApiException.class,
-                () -> service.sync(token, owner, request)
+        mockRootReadme(
+                encode("# LeetSync\n\nGlobal stats: 4 Problems Solved\n"),
+                "root-readme-sha",
+                "README.md"
         );
 
-        verify(githubClient, never()).putFile(
+        when(githubClient.putFile(
                 eq(token), eq(owner), eq(repo),
-                eq("README.md"), any()
+                anyString(), any()
+        )).thenThrow(
+                WebClientResponseException.create(
+                        502,
+                        "Bad Gateway",
+                        org.springframework.http.HttpHeaders.EMPTY,
+                        new byte[0],
+                        StandardCharsets.UTF_8
+                )
+        );
+
+        assertThrows(
+                WebClientResponseException.class,
+                () -> service.sync(token, owner, request)
         );
     }
 }

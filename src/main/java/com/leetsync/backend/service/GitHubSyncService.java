@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class GitHubSyncService {
@@ -87,6 +89,18 @@ public class GitHubSyncService {
         boolean isNewProblem =
                 !solutionExists && !problemReadmeExists;
 
+        /*
+         * Verify the root README before creating files for a new
+         * problem. Reuse this exact response for the later update.
+         */
+        GitHubContentsResponse verifiedRootReadme = null;
+
+        if (isNewProblem) {
+            verifiedRootReadme = verifyRootReadme(
+                    token, owner, repo, branch
+            );
+        }
+
         String formattedCode = formatter.format(request);
 
         // Handle a missing solution file.
@@ -131,9 +145,8 @@ public class GitHubSyncService {
                         token,
                         owner,
                         repo,
-                        request,
                         branch,
-                        true
+                        verifiedRootReadme
                 );
             }
 
@@ -278,44 +291,63 @@ public class GitHubSyncService {
         );
     }
 
-    private void updateRootReadme(
+    private GitHubContentsResponse verifyRootReadme(
             String token,
             String owner,
             String repo,
-            SubmissionRequest request,
-            String branch,
-            boolean newProblem
+            String branch
     ) {
-        String path = "README.md";
-
-        GitHubContentsResponse existingRootReadme =
+        GitHubContentsResponse rootReadme =
                 githubClient.getFile(
-                        token, owner, repo, path, branch
+                        token, owner, repo, "README.md", branch
                 );
 
-        // Never overwrite the root README if it could not be read.
-        if (existingRootReadme == null
-                || existingRootReadme.content() == null
-                || existingRootReadme.path() == null
-                || !existingRootReadme.path().equalsIgnoreCase(path)) {
+        if (rootReadme == null
+                || rootReadme.content() == null
+                || rootReadme.path() == null
+                || !rootReadme.path().equalsIgnoreCase("README.md")
+                || rootReadme.sha() == null
+                || rootReadme.sha().isBlank()) {
             throw new ApiException(
                     HttpStatus.BAD_GATEWAY,
                     "ROOT_README_READ_ERROR",
                     "Could not verify the existing root README. "
+                            + "Refusing to create files for a new problem."
+            );
+        }
+
+        // Ensure the returned content is valid Base64 before proceeding.
+        try {
+            decode(rootReadme.content());
+        } catch (IllegalArgumentException exception) {
+            throw new ApiException(
+                    HttpStatus.BAD_GATEWAY,
+                    "ROOT_README_READ_ERROR",
+                    "The existing root README could not be decoded. "
                             + "Refusing to overwrite it."
             );
         }
 
+        return rootReadme;
+    }
+
+    private void updateRootReadme(
+            String token,
+            String owner,
+            String repo,
+            String branch,
+            GitHubContentsResponse existingRootReadme
+    ) {
+        // Use the already-verified response. Do not fetch the file again.
         String content = decode(existingRootReadme.content());
 
-        java.util.regex.Pattern pattern =
-                java.util.regex.Pattern.compile(
-                        "Global stats:\\s*(\\d+)\\s+"
-                                + "Problems?\\s+Solved",
-                        java.util.regex.Pattern.CASE_INSENSITIVE
-                );
+        Pattern pattern = Pattern.compile(
+                "Global stats:\\s*(\\d+)\\s+"
+                        + "Problems?\\s+Solved",
+                Pattern.CASE_INSENSITIVE
+        );
 
-        java.util.regex.Matcher matcher = pattern.matcher(content);
+        Matcher matcher = pattern.matcher(content);
 
         boolean statsExist = matcher.find();
 
@@ -323,9 +355,7 @@ public class GitHubSyncService {
                 ? Integer.parseInt(matcher.group(1))
                 : 0;
 
-        if (newProblem) {
-            solvedCount++;
-        }
+        solvedCount++;
 
         String problemWord = solvedCount == 1
                 ? "Problem"
@@ -341,7 +371,7 @@ public class GitHubSyncService {
 
         if (matcher.find()) {
             content = matcher.replaceFirst(
-                    java.util.regex.Matcher.quoteReplacement(statsLine)
+                    Matcher.quoteReplacement(statsLine)
             );
         } else {
             content = content.stripTrailing()
@@ -362,7 +392,7 @@ public class GitHubSyncService {
                 token,
                 owner,
                 repo,
-                path,
+                "README.md",
                 putRequest
         );
     }
