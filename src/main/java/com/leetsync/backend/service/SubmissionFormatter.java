@@ -27,11 +27,6 @@ public class SubmissionFormatter {
         return header + "\n" + code + (code.endsWith("\n") ? "" : "\n");
     }
 
-    /**
-     * Extracts the actual source code from a LeetSync-formatted file.
-     * The formatter puts all metadata at the beginning of the file,
-     * followed by one blank line and then the original source code.
-     */
     public String extractCode(String formattedFile) {
         String normalized = formattedFile.replace("\r\n", "\n");
 

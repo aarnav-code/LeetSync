@@ -16,15 +16,21 @@ public class GitHubSyncService {
     private final CodeFileService codeFileService;
     private final SubmissionFormatter formatter;
 
-    public GitHubSyncService(GitHubClient githubClient,
-                             CodeFileService codeFileService,
-                             SubmissionFormatter formatter) {
+    public GitHubSyncService(
+            GitHubClient githubClient,
+            CodeFileService codeFileService,
+            SubmissionFormatter formatter
+    ) {
         this.githubClient = githubClient;
         this.codeFileService = codeFileService;
         this.formatter = formatter;
     }
 
-    public SyncResponse sync(String token, String owner, SubmissionRequest request) {
+    public SyncResponse sync(
+            String token,
+            String owner,
+            SubmissionRequest request
+    ) {
 
         // Only accepted submissions should reach GitHub.
         if (request.accepted() != null && !request.accepted()) {
@@ -35,7 +41,8 @@ public class GitHubSyncService {
             );
         }
 
-        if (request.repository() == null || request.repository().isBlank()) {
+        if (request.repository() == null
+                || request.repository().isBlank()) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "MISSING_REPOSITORY",
@@ -45,42 +52,55 @@ public class GitHubSyncService {
 
         String repo = request.repository();
 
-        // Verify that the repository exists and determine its default branch.
+        // Verify the repository and determine the target branch.
         GitHubRepositoryResponse repository =
                 githubClient.getRepository(token, owner, repo);
 
-        String branch = request.branch() == null || request.branch().isBlank()
+        String branch = request.branch() == null
+                || request.branch().isBlank()
                 ? repository.defaultBranch()
                 : request.branch();
 
         // Generate paths for this problem.
         String solutionPath = codeFileService.path(request);
-        System.out.println("SYNC SOLUTION PATH = " + solutionPath);
-        String problemReadmePath = codeFileService.problemReadmePath(request);
+        String problemReadmePath =
+                codeFileService.problemReadmePath(request);
 
-        // Check whether this problem already exists.
+        // Check both files independently.
         GitHubContentsResponse existingSolution =
-                githubClient.getFile(token, owner, repo, solutionPath, branch);
+                githubClient.getFile(
+                        token, owner, repo, solutionPath, branch
+                );
 
         GitHubContentsResponse existingProblemReadme =
-                githubClient.getFile(token, owner, repo, problemReadmePath, branch);
+                githubClient.getFile(
+                        token, owner, repo, problemReadmePath, branch
+                );
 
-        boolean isNewProblem = existingProblemReadme == null
-                || existingProblemReadme.content() == null;
+        boolean solutionExists = existingSolution != null
+                && existingSolution.content() != null;
+
+        boolean problemReadmeExists = existingProblemReadme != null
+                && existingProblemReadme.content() != null;
+
+        // A problem is new only when neither file exists.
+        boolean isNewProblem =
+                !solutionExists && !problemReadmeExists;
 
         String formattedCode = formatter.format(request);
 
-        // Handle the solution file.
-        if (existingSolution == null || existingSolution.content() == null) {
+        // Handle a missing solution file.
+        if (!solutionExists) {
 
             String message = buildCommitMessage(request, false);
 
-            GitHubPutFileRequest putRequest = new GitHubPutFileRequest(
-                    message,
-                    encode(formattedCode),
-                    branch,
-                    null
-            );
+            GitHubPutFileRequest putRequest =
+                    new GitHubPutFileRequest(
+                            message,
+                            encode(formattedCode),
+                            branch,
+                            null
+                    );
 
             GitHubPutFileResponse result =
                     githubClient.putFile(
@@ -93,17 +113,20 @@ public class GitHubSyncService {
 
             String sha = extractCommitSha(result);
 
-            // New problem: create its README and update global stats.
-            if (isNewProblem) {
+            // Create or repair the problem README independently.
+            if (!problemReadmeExists) {
                 createOrUpdateProblemReadme(
                         token,
                         owner,
                         repo,
                         request,
                         branch,
-                        null
+                        existingProblemReadme
                 );
+            }
 
+            // Increment the count only for a genuinely new problem.
+            if (isNewProblem) {
                 updateRootReadme(
                         token,
                         owner,
@@ -123,50 +146,64 @@ public class GitHubSyncService {
             );
         }
 
-        // Decode the existing GitHub file.
+        // Decode the existing solution file.
         String existingFile = decode(existingSolution.content());
 
-        /*
-         * The metadata header is generated by SubmissionFormatter.
-         * We compare the actual source code separately from the metadata.
-         */
         String existingCode = formatter.extractCode(existingFile);
 
-        // Exact same source code = never create a duplicate commit.
+        /*
+         * Repair a missing problem README before any early return.
+         * This also handles identical solutions without creating
+         * another solution commit.
+         */
+        if (!problemReadmeExists) {
+            createOrUpdateProblemReadme(
+                    token,
+                    owner,
+                    repo,
+                    request,
+                    branch,
+                    existingProblemReadme
+            );
+        }
+
+        // Identical source code must not create a duplicate commit.
         if (existingCode.equals(normalizeCode(request.code()))) {
             return SyncResponse.skipped(
-                    "Exact same solution already exists; no duplicate commit created.",
+                    "Exact same solution already exists; "
+                            + "no duplicate solution commit created.",
                     solutionPath
             );
         }
 
         /*
-         * Different code:
-         *
          * If performance information is available, only replace the
          * existing solution when the new solution is demonstrably
          * better based on the available metrics.
          *
-         * If no performance information is available, we allow the
+         * If no performance information is available, allow the
          * different solution to be stored.
          */
-        boolean shouldUpdate = shouldUpdateSolution(request, existingFile);
+        boolean shouldUpdate =
+                shouldUpdateSolution(request, existingFile);
 
         if (!shouldUpdate) {
             return SyncResponse.skipped(
-                    "Different solution found, but the existing solution is not outperformed.",
+                    "Different solution found, but the existing "
+                            + "solution is not outperformed.",
                     solutionPath
             );
         }
 
         String message = buildCommitMessage(request, true);
 
-        GitHubPutFileRequest putRequest = new GitHubPutFileRequest(
-                message,
-                encode(formattedCode),
-                branch,
-                existingSolution.sha()
-        );
+        GitHubPutFileRequest putRequest =
+                new GitHubPutFileRequest(
+                        message,
+                        encode(formattedCode),
+                        branch,
+                        existingSolution.sha()
+                );
 
         GitHubPutFileResponse result =
                 githubClient.putFile(
@@ -179,11 +216,9 @@ public class GitHubSyncService {
 
         String sha = extractCommitSha(result);
 
-        /*
-         * The problem already existed, so the global count must NOT
-         * increase. We only update the problem README if necessary.
-         */
-        if (!isNewProblem) {
+        // Existing problems never increase the global solved count.
+        // Update their README only when it already existed.
+        if (problemReadmeExists) {
             createOrUpdateProblemReadme(
                     token,
                     owner,
@@ -221,12 +256,18 @@ public class GitHubSyncService {
                 + "- Source: " + request.source() + "\n"
                 + "- Language: " + request.language() + "\n";
 
-        GitHubPutFileRequest putRequest = new GitHubPutFileRequest(
-                "Update README: " + request.problemId() + ". " + request.problemTitle(),
-                encode(content),
-                branch,
-                existingReadme == null ? null : existingReadme.sha()
-        );
+        GitHubPutFileRequest putRequest =
+                new GitHubPutFileRequest(
+                        "Update README: "
+                                + request.problemId()
+                                + ". "
+                                + request.problemTitle(),
+                        encode(content),
+                        branch,
+                        existingReadme == null
+                                ? null
+                                : existingReadme.sha()
+                );
 
         githubClient.putFile(
                 token,
@@ -236,7 +277,6 @@ public class GitHubSyncService {
                 putRequest
         );
     }
-
 
     private void updateRootReadme(
             String token,
@@ -249,7 +289,9 @@ public class GitHubSyncService {
         String path = "README.md";
 
         GitHubContentsResponse existingRootReadme =
-                githubClient.getFile(token, owner, repo, path, branch);
+                githubClient.getFile(
+                        token, owner, repo, path, branch
+                );
 
         String content = existingRootReadme == null
                 || existingRootReadme.content() == null
@@ -258,7 +300,8 @@ public class GitHubSyncService {
 
         java.util.regex.Pattern pattern =
                 java.util.regex.Pattern.compile(
-                        "Global stats:\\s*(\\d+)\\s+Problems?\\s+Solved",
+                        "Global stats:\\s*(\\d+)\\s+"
+                                + "Problems?\\s+Solved",
                         java.util.regex.Pattern.CASE_INSENSITIVE
                 );
 
@@ -274,7 +317,9 @@ public class GitHubSyncService {
             solvedCount++;
         }
 
-        String problemWord = solvedCount == 1 ? "Problem" : "Problems";
+        String problemWord = solvedCount == 1
+                ? "Problem"
+                : "Problems";
 
         String statsLine = "Global stats: "
                 + solvedCount
@@ -295,12 +340,15 @@ public class GitHubSyncService {
                     + "\n";
         }
 
-        GitHubPutFileRequest putRequest = new GitHubPutFileRequest(
-                "Update global stats",
-                encode(content),
-                branch,
-                existingRootReadme == null ? null : existingRootReadme.sha()
-        );
+        GitHubPutFileRequest putRequest =
+                new GitHubPutFileRequest(
+                        "Update global stats",
+                        encode(content),
+                        branch,
+                        existingRootReadme == null
+                                ? null
+                                : existingRootReadme.sha()
+                );
 
         githubClient.putFile(
                 token,
@@ -311,12 +359,10 @@ public class GitHubSyncService {
         );
     }
 
-
     private boolean shouldUpdateSolution(
             SubmissionRequest request,
             String existingFile
     ) {
-
         Performance existingPerformance =
                 extractPerformance(existingFile);
 
@@ -351,11 +397,13 @@ public class GitHubSyncService {
                     && strictlyBetter;
         }
 
-        if (newRuntime != null && existingPerformance.runtime != null) {
+        if (newRuntime != null
+                && existingPerformance.runtime != null) {
             return newRuntime > existingPerformance.runtime;
         }
 
-        if (newMemory != null && existingPerformance.memory != null) {
+        if (newMemory != null
+                && existingPerformance.memory != null) {
             return newMemory > existingPerformance.memory;
         }
 
@@ -370,9 +418,7 @@ public class GitHubSyncService {
     }
 
     private Double extractPercentile(String file, String prefix) {
-
         for (String line : file.split("\n")) {
-
             if (!line.startsWith(prefix)) {
                 continue;
             }
@@ -383,9 +429,9 @@ public class GitHubSyncService {
                 return null;
             }
 
-            String value = line.substring(beatsIndex + "Beats ".length())
-                    .replace("%", "")
-                    .trim();
+            String value = line.substring(
+                    beatsIndex + "Beats ".length()
+            ).replace("%", "").trim();
 
             try {
                 return Double.parseDouble(value);
@@ -403,7 +449,9 @@ public class GitHubSyncService {
 
     private String encode(String value) {
         return Base64.getEncoder()
-                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
+                .encodeToString(
+                        value.getBytes(StandardCharsets.UTF_8)
+                );
     }
 
     private String decode(String base64) {
@@ -430,7 +478,6 @@ public class GitHubSyncService {
     }
 
     private String extractCommitSha(GitHubPutFileResponse result) {
-
         if (result == null || result.commit() == null) {
             return null;
         }
