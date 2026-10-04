@@ -237,6 +237,7 @@ public class GitHubSyncService {
         );
     }
 
+
     private void updateRootReadme(
             String token,
             String owner,
@@ -250,23 +251,24 @@ public class GitHubSyncService {
         GitHubContentsResponse existingRootReadme =
                 githubClient.getFile(token, owner, repo, path, branch);
 
-        int solvedCount = 0;
+        String content = existingRootReadme == null
+                || existingRootReadme.content() == null
+                ? "# My LeetCode Solutions\n"
+                : decode(existingRootReadme.content());
 
-        if (existingRootReadme != null && existingRootReadme.content() != null) {
-            String existingContent = decode(existingRootReadme.content());
+        java.util.regex.Pattern pattern =
+                java.util.regex.Pattern.compile(
+                        "Global stats:\\s*(\\d+)\\s+Problems?\\s+Solved",
+                        java.util.regex.Pattern.CASE_INSENSITIVE
+                );
 
-            java.util.regex.Pattern pattern =
-                    java.util.regex.Pattern.compile(
-                            "Global stats:\\s*(\\d+)\\s+Problem[s]?\\s+Solved",
-                            java.util.regex.Pattern.CASE_INSENSITIVE
-                    );
+        java.util.regex.Matcher matcher = pattern.matcher(content);
 
-            java.util.regex.Matcher matcher = pattern.matcher(existingContent);
+        boolean statsExist = matcher.find();
 
-            if (matcher.find()) {
-                solvedCount = Integer.parseInt(matcher.group(1));
-            }
-        }
+        int solvedCount = statsExist
+                ? Integer.parseInt(matcher.group(1))
+                : 0;
 
         if (newProblem) {
             solvedCount++;
@@ -274,13 +276,24 @@ public class GitHubSyncService {
 
         String problemWord = solvedCount == 1 ? "Problem" : "Problems";
 
-        String content =
-                "# My LeetCode Solutions\n\n"
-                        + "Global stats: "
-                        + solvedCount
-                        + " "
-                        + problemWord
-                        + " Solved\n";
+        String statsLine = "Global stats: "
+                + solvedCount
+                + " "
+                + problemWord
+                + " Solved";
+
+        matcher = pattern.matcher(content);
+
+        if (matcher.find()) {
+            content = matcher.replaceFirst(
+                    java.util.regex.Matcher.quoteReplacement(statsLine)
+            );
+        } else {
+            content = content.stripTrailing()
+                    + "\n\n"
+                    + statsLine
+                    + "\n";
+        }
 
         GitHubPutFileRequest putRequest = new GitHubPutFileRequest(
                 "Update global stats",
@@ -298,17 +311,7 @@ public class GitHubSyncService {
         );
     }
 
-    /**
-     * Determines whether a new solution should replace the existing one.
-     *
-     * Runtime and memory are treated independently:
-     *
-     * - If both are available, the new solution must be no worse in either
-     *   metric and strictly better in at least one.
-     * - If only runtime is available, runtime must improve.
-     * - If only memory is available, memory must improve.
-     * - If neither metric is available, a different solution is accepted.
-     */
+
     private boolean shouldUpdateSolution(
             SubmissionRequest request,
             String existingFile
@@ -320,31 +323,15 @@ public class GitHubSyncService {
         Double newRuntime = request.runtimePercentile();
         Double newMemory = request.memoryPercentile();
 
-        /*
-         * No percentile information on the new submission.
-         * We cannot make a performance comparison, so allow a
-         * genuinely different solution to be stored.
-         */
         if (newRuntime == null && newMemory == null) {
             return true;
         }
 
-        /*
-         * No performance information was stored in the old file.
-         * Since we have nothing meaningful to compare against,
-         * allow the new solution.
-         */
         if (existingPerformance.runtime == null
                 && existingPerformance.memory == null) {
             return true;
         }
 
-        /*
-         * Both runtime and memory are available.
-         *
-         * Percentile is "Beats X%".
-         * Higher percentile = better performance.
-         */
         if (newRuntime != null && newMemory != null
                 && existingPerformance.runtime != null
                 && existingPerformance.memory != null) {
@@ -364,25 +351,14 @@ public class GitHubSyncService {
                     && strictlyBetter;
         }
 
-        /*
-         * Only runtime is available on both sides.
-         */
         if (newRuntime != null && existingPerformance.runtime != null) {
             return newRuntime > existingPerformance.runtime;
         }
 
-        /*
-         * Only memory is available on both sides.
-         */
         if (newMemory != null && existingPerformance.memory != null) {
             return newMemory > existingPerformance.memory;
         }
 
-        /*
-         * We have a metric on one side but not the other.
-         * There isn't enough information for a meaningful
-         * performance comparison, so allow the new solution.
-         */
         return true;
     }
 
@@ -393,12 +369,6 @@ public class GitHubSyncService {
         return new Performance(runtime, memory);
     }
 
-    /**
-     * Extracts a percentile from lines such as:
-     *
-     * // Runtime: 3 ms | Beats 98.2%
-     * // Memory: 45 MB | Beats 80.1%
-     */
     private Double extractPercentile(String file, String prefix) {
 
         for (String line : file.split("\n")) {
