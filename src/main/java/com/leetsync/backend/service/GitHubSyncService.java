@@ -293,10 +293,20 @@ public class GitHubSyncService {
                         token, owner, repo, path, branch
                 );
 
-        String content = existingRootReadme == null
+        // Never overwrite the root README if it could not be read.
+        if (existingRootReadme == null
                 || existingRootReadme.content() == null
-                ? "# My LeetCode Solutions\n"
-                : decode(existingRootReadme.content());
+                || existingRootReadme.path() == null
+                || !existingRootReadme.path().equalsIgnoreCase(path)) {
+            throw new ApiException(
+                    HttpStatus.BAD_GATEWAY,
+                    "ROOT_README_READ_ERROR",
+                    "Could not verify the existing root README. "
+                            + "Refusing to overwrite it."
+            );
+        }
+
+        String content = decode(existingRootReadme.content());
 
         java.util.regex.Pattern pattern =
                 java.util.regex.Pattern.compile(
@@ -345,9 +355,7 @@ public class GitHubSyncService {
                         "Update global stats",
                         encode(content),
                         branch,
-                        existingRootReadme == null
-                                ? null
-                                : existingRootReadme.sha()
+                        existingRootReadme.sha()
                 );
 
         githubClient.putFile(

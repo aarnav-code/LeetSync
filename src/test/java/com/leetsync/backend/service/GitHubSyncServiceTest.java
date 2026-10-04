@@ -1,3 +1,4 @@
+
 package com.leetsync.backend.service;
 
 import com.leetsync.backend.dto.*;
@@ -7,6 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.leetsync.backend.exception.ApiException;
+
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -58,8 +62,20 @@ class GitHubSyncServiceTest {
 
         when(githubClient.getFile(
                 eq(token), eq(owner), eq(repo),
-                contains("README.md"), eq(branch)
+                argThat(path -> path != null
+                        && path.endsWith("/README.md")
+                        && !path.equals("README.md")),
+                eq(branch)
         )).thenReturn(null);
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), eq(branch)
+        )).thenReturn(new GitHubContentsResponse(
+                encode("# LeetSync\n\nMy project documentation.\n"),
+                "root-readme-sha",
+                "README.md"
+        ));
 
         when(githubClient.putFile(
                 eq(token), eq(owner), eq(repo), anyString(), any()
@@ -73,6 +89,16 @@ class GitHubSyncServiceTest {
 
         verify(githubClient, times(3)).putFile(
                 eq(token), eq(owner), eq(repo), anyString(), any()
+        );
+
+        verify(githubClient).putFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"),
+                argThat(body -> {
+                    String updated = decode(body.content());
+                    return updated.contains("My project documentation.")
+                            && updated.contains("Global stats: 1 Problem Solved");
+                })
         );
     }
 
@@ -88,9 +114,13 @@ class GitHubSyncServiceTest {
 
         when(githubClient.getFile(
                 eq(token), eq(owner), eq(repo),
-                contains("README.md"), eq(branch)
+                argThat(path -> path != null
+                        && path.endsWith("/README.md")
+                        && !path.equals("README.md")),
+                eq(branch)
         )).thenReturn(new GitHubContentsResponse(
-                encode("# 1. Two Sum"), "readme-sha", "README.md"
+                encode("# 1. Two Sum"), "readme-sha",
+                "0001-two-sum/README.md"
         ));
 
         when(githubClient.putFile(
@@ -105,6 +135,10 @@ class GitHubSyncServiceTest {
 
         verify(githubClient, times(1)).putFile(
                 eq(token), eq(owner), eq(repo), anyString(), any()
+        );
+
+        verify(githubClient, never()).putFile(
+                eq(token), eq(owner), eq(repo), eq("README.md"), any()
         );
     }
 
@@ -124,7 +158,10 @@ class GitHubSyncServiceTest {
 
         when(githubClient.getFile(
                 eq(token), eq(owner), eq(repo),
-                contains("README.md"), eq(branch)
+                argThat(path -> path != null
+                        && path.endsWith("/README.md")
+                        && !path.equals("README.md")),
+                eq(branch)
         )).thenReturn(null);
 
         when(githubClient.putFile(
@@ -139,7 +176,10 @@ class GitHubSyncServiceTest {
 
         verify(githubClient, times(1)).putFile(
                 eq(token), eq(owner), eq(repo),
-                contains("README.md"), any()
+                argThat(path -> path != null
+                        && path.endsWith("/README.md")
+                        && !path.equals("README.md")),
+                any()
         );
 
         verify(githubClient, never()).putFile(
@@ -177,6 +217,53 @@ class GitHubSyncServiceTest {
     private String encode(String value) {
         return Base64.getEncoder().encodeToString(
                 value.getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
+    private String decode(String value) {
+        return new String(
+                Base64.getDecoder().decode(value),
+                StandardCharsets.UTF_8
+        );
+    }
+
+    @Test
+    void refusesToOverwriteRootReadmeWhenItCannotBeRead() {
+        SubmissionRequest request =
+                request("1", "Two Sum", "class Solution {}");
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                contains("solution.java"), eq(branch)
+        )).thenReturn(null);
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                argThat(path -> path != null
+                        && path.endsWith("/README.md")
+                        && !path.equals("README.md")),
+                eq(branch)
+        )).thenReturn(null);
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), eq(branch)
+        )).thenReturn(null);
+
+        when(githubClient.putFile(
+                eq(token), eq(owner), eq(repo), anyString(), any()
+        )).thenReturn(new GitHubPutFileResponse(
+                new GitHubPutFileResponse.Commit("test-sha")
+        ));
+
+        assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        verify(githubClient, never()).putFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), any()
         );
     }
 }
