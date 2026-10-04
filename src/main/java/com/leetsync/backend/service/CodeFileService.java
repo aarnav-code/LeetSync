@@ -11,7 +11,7 @@ public class CodeFileService {
     public String extension(String language) {
         String value = language.toLowerCase(Locale.ROOT).replace(" ", "");
         return switch (value) {
-            case "cpp", "c++", "gnu++17", "gnu++20" -> "cpp";
+            case "cpp", "c++", "gnu++17", "gnu++20", "gnuc++17", "gnuc++20" -> "cpp";
             case "java" -> "java";
             case "python", "python3", "py" -> "py";
             case "javascript", "javascript/node", "js" -> "js";
@@ -34,17 +34,35 @@ public class CodeFileService {
                 .replaceAll("^-|-$", "");
     }
 
+    public String platformDirectory(SubmissionRequest request) {
+        return switch (request.source()) {
+            case LEETCODE -> "LeetCode Solutions";
+            case CODEFORCES -> "Codeforces Solutions";
+            case GEEKS_FOR_GEEKS -> "GeeksforGeeks Solutions";
+        };
+    }
+
     public String problemDirectory(SubmissionRequest request) {
         String number = request.problemId().replaceAll("\\D", "");
 
         if (number.isBlank()) {
-            throw new IllegalArgumentException("Problem number is missing or invalid.");
+            throw new IllegalArgumentException(
+                    "Problem number is missing or invalid."
+            );
         }
 
-        String paddedNumber = String.format("%04d", Integer.parseInt(number));
+        String paddedNumber = String.format(
+                "%04d",
+                Integer.parseInt(number)
+        );
+
         String slug = sanitize(request.problemTitle());
 
-        return paddedNumber + "-" + slug;
+        return platformDirectory(request)
+                + "/"
+                + paddedNumber
+                + "-"
+                + slug;
     }
 
     public String path(SubmissionRequest request) {
