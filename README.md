@@ -1,173 +1,135 @@
 # LeetSync
 
+LeetSync is a Chrome extension and Spring Boot backend that automatically synchronizes accepted LeetCode submissions with GitHub.
 
-LeetSync is a Spring Boot backend designed to organize coding-problem solutions in a GitHub repository. It processes submission data, formats solution files with metadata, and synchronizes them with GitHub while avoiding duplicate commits for identical code.
+Instead of manually copying solutions after solving a problem, LeetSync retrieves the submitted code, checks the submission verdict, and sends eligible submissions to the backend for synchronization. Solutions are organized into individual problem directories, helping developers maintain a structured coding portfolio on GitHub.
 
-The backend currently provides REST APIs for submissions from LeetCode, Codeforces, and GeeksforGeeks. Browser-extension integration is planned as the next major phase.
+## Demo
+
+**LeetSync in Action**
+
+<!-- Demo video will be embedded here. -->
+
+*A short walkthrough demonstrating submission detection, synchronization, and the resulting GitHub files will be added here.*
 
 ## Features
 
-* **GitHub integration:** Read repository information and create or update files using the GitHub REST API.
-* **Multi-platform support:** Submission endpoints for LeetCode, Codeforces, and GeeksforGeeks.
-* **Organized solutions:** Store each problem in its own directory, with filenames based on the programming language.
-* **Submission metadata:** Include platform, problem details, language, runtime, and memory information when available.
-* **Duplicate prevention:** Skip synchronization when the existing solution contains identical source code.
-* **Performance-based updates:** Compare available runtime and memory percentiles when deciding whether to replace an existing solution.
-* **Automatic README generation:** Generate a README for each problem and maintain a solved-problem count in the root README.
-* **Authentication error handling:** Return application-specific errors for GitHub authentication and API failures.
+* **LeetCode Integration:** Retrieve submission details and source code from LeetCode.
+* **Accepted-Submission Filtering:** Prevent unsuccessful submissions from being synchronized.
+* **GitHub Integration:** Synchronize solutions with a configured GitHub repository.
+* **Automatic Commits:** Commit synchronized solutions to GitHub.
+* **Organized Solutions:** Store each problem in its own directory under `LeetCode Solutions/`.
+* **Language-Aware Filenames:** Use appropriate file extensions for solution files.
+* **Duplicate Handling:** Avoid unnecessary synchronization when the existing solution contains identical code.
+* **Problem Documentation:** Maintain problem-specific README files alongside solutions.
 
 ## Tech Stack
 
 * Java 21
-* Spring Boot 3.5.6
+* Spring Boot
 * Gradle
 * PostgreSQL
-* Spring Data JPA and Hibernate
-* Spring Web and WebFlux
-* Jakarta Bean Validation
+* Spring Web
+* Spring Data JPA
+* Chrome Extension APIs
 * GitHub REST API
 
 ## Architecture
 
-The backend follows a layered structure:
+LeetSync consists of two main components.
 
-1. **Controllers:** Expose REST endpoints for authentication, solution management, and submission synchronization.
-2. **Services:** Validate submission conditions, generate file paths, format code, and coordinate synchronization.
-3. **GitHub client:** Communicates with the GitHub REST API to read and write repository files.
-4. **Persistence layer:** Uses Spring Data JPA and PostgreSQL for solution-related data.
+### Chrome Extension
 
-### Submission workflow
+The Chrome extension integrates with LeetCode submission pages to retrieve submission details and source code, identify the submission verdict, and make eligible submissions available for synchronization.
 
-1. A client sends submission details to the backend.
-2. The backend checks the request and verifies the target GitHub repository.
-3. It generates the problem directory and formats the solution with metadata.
-4. It checks whether the solution already exists.
-5. Identical code is skipped. Different code may replace the existing solution according to the available performance information.
-6. When required, the backend updates the problem README and the root solved-problem count.
-7. The API returns the synchronization status and relevant file path.
+### Spring Boot Backend
+
+The backend receives submission data, validates the request, prepares the destination path, checks the existing solution, and coordinates synchronization with GitHub.
+
+### Submission Workflow
+
+1. Submit a solution on LeetCode.
+2. Open LeetSync on the relevant submission page.
+3. The extension retrieves the submission code and verdict.
+4. The extension sends an eligible submission to the backend.
+5. The backend prepares the solution file and checks whether synchronization is necessary.
+6. The backend creates or updates the relevant files in GitHub.
+7. The synchronization result indicates whether the solution was created, updated, or skipped.
 
 ## API Reference
 
 The backend runs on port `8080` by default.
 
-### Authentication
+### GitHub Authentication
 
-| Method | Endpoint                    | Purpose                      |
-| ------ | --------------------------- | ---------------------------- |
-| POST   | `/api/auth/github/validate` | Validate a GitHub credential |
+| Method | Endpoint                    | Purpose                     |
+| ------ | --------------------------- | --------------------------- |
+| POST   | `/api/auth/github/validate` | Validate GitHub credentials |
 
-### Solution management and GitHub operations
+### Solution Synchronization
 
-| Method | Endpoint                                               | Purpose                                  |
-| ------ | ------------------------------------------------------ | ---------------------------------------- |
-| POST   | `/api/solutions`                                       | Create a solution record                 |
-| GET    | `/api/solutions`                                       | Retrieve solution records                |
-| GET    | `/api/solutions/{id}`                                  | Retrieve a solution by ID                |
-| PUT    | `/api/solutions/{id}`                                  | Update a solution record                 |
-| DELETE | `/api/solutions/{id}`                                  | Delete a solution record                 |
-| GET    | `/api/solutions/github/user`                           | Retrieve the authenticated GitHub user   |
-| GET    | `/api/solutions/github/repository/{owner}/{repo}`      | Retrieve repository information          |
-| GET    | `/api/solutions/github/repository/{owner}/{repo}/file` | Read a repository file                   |
-| PUT    | `/api/solutions/github/repository/{owner}/{repo}/file` | Create or update a repository file       |
-| POST   | `/api/solutions/github/sync/{owner}/{repo}`            | Synchronize a solution with a repository |
+| Method | Endpoint                                    | Purpose                                         |
+| ------ | ------------------------------------------- | ----------------------------------------------- |
+| POST   | `/api/solutions/github/sync/{owner}/{repo}` | Synchronize a solution with a GitHub repository |
 
-The file endpoints accept additional query parameters such as `path` and, for reading, `branch`.
-
-### Submission synchronization
-
-| Method | Endpoint               | Purpose                                |
-| ------ | ---------------------- | -------------------------------------- |
-| POST   | `/api/sync/submission` | Synchronize a submission               |
-| POST   | `/api/sync/leetcode`   | Synchronize a LeetCode submission      |
-| POST   | `/api/sync/codeforces` | Synchronize a Codeforces submission    |
-| POST   | `/api/sync/gfg`        | Synchronize a GeeksforGeeks submission |
-
-The synchronization endpoints use an `Authorization` header and an `X-GitHub-Owner` header.
-
-├── 0002-add-two-numbers
-│   ├── solution.java
-│   └── README.md
-## Example Submission Request
-
-└── 0003-longest-substring-without-repeating-characters
-A submission request uses the following JSON structure:
+### Example Submission Request
 
 ```json
 {
-  "source": "LEETCODE",
-  "problemId": "1",
+  "problemNumber": 1,
   "problemTitle": "Two Sum",
   "language": "Java",
   "code": "class Solution { }",
-  "repository": "leetcode-solutions",
-  "branch": "main",
-  "runtime": "2 ms",
-  "runtimePercentile": 95.2,
-  "memory": "42 MB",
-  "memoryPercentile": 78.1,
   "accepted": true
 }
 ```
 
-The repository and branch fields allow the client to specify the destination. When the branch is omitted, the backend uses the repository's default branch.
-
-Runtime, memory, percentile, and acceptance fields are optional in the request model. The synchronization service rejects explicitly unaccepted submissions, but currently permits a missing acceptance value.
+This example illustrates the main submission fields. The actual request should contain the complete solution code and match the backend request model.
 
 ### Example Response
 
 ```json
 {
   "status": "CREATED",
-  "message": "Auto-commit: Solved 1. Two Sum",
-  "path": "0001-two-sum/solution.java",
+  "message": "Solution synchronized successfully",
+  "path": "LeetCode Solutions/0001-two-sum/solution.java",
   "commitSha": "example-commit-sha",
   "changed": true
 }
 ```
 
-Possible statuses include `CREATED`, `UPDATED`, and `SKIPPED`.
+This response is illustrative. Actual response messages, status values, paths, and commit hashes depend on the backend implementation and synchronization result.
 
 ## Repository Structure
 
-Solutions are organized by coding platform. Each problem directory uses a zero-padded problem number and a sanitized problem title, and contains the solution file and a problem-specific README.
+The repository contains the backend source code and the collection of synchronized LeetCode solutions.
 
 ```text
-LeetCode Solutions/
-└── 0001-two-sum/
-    ├── solution.java
-    └── README.md
-
-Codeforces Solutions/
-└── 0001-example-problem/
-    ├── solution.cpp
-    └── README.md
-
-GeeksforGeeks Solutions/
-└── 0001-example-problem/
-    ├── solution.py
-    └── README.md
+LeetSync/
+├── src/
+│   └── main/
+├── gradle/
+├── build.gradle
+├── settings.gradle
+├── gradlew
+├── gradlew.bat
+├── README.md
+└── LeetCode Solutions/
+    ├── 0001-two-sum/
+    │   ├── solution.java
+    │   └── README.md
+    ├── 0002-add-two-numbers/
+    │   ├── solution.java
+    │   └── README.md
+    ├── 0003-longest-substring-without-repeating-characters/
+    │   ├── solution.java
+    │   └── README.md
+    └── ...
 ```
 
-Global stats: 5 Problems Solved
-The examples illustrate the directory layout; actual filenames and extensions depend on the problem and programming language.
+The directory tree is illustrative and omits other backend files and synchronized solutions.
 
-### Supported language extensions
-
-| Language                        | Extension |
-| ------------------------------- | --------- |
-| Java                            | `.java`   |
-| C                               | `.c`      |
-| C++                             | `.cpp`    |
-| Python                          | `.py`     |
-| JavaScript                      | `.js`     |
-| TypeScript                      | `.ts`     |
-| C#                              | `.cs`     |
-| Kotlin                          | `.kt`     |
-| Go                              | `.go`     |
-| Rust                            | `.rs`     |
-| Swift                           | `.swift`  |
-| PHP                             | `.php`    |
-| Other or unrecognized languages | `.txt`    |
+Each problem directory uses a zero-padded problem number followed by a sanitized problem title. Solution files use an extension appropriate to the programming language.
 
 ## Getting Started
 
@@ -176,17 +138,17 @@ The examples illustrate the directory layout; actual filenames and extensions de
 * Java 21
 * PostgreSQL
 * Git
+* Google Chrome
+* A GitHub account and an appropriately scoped GitHub access token
 
-### 1. Clone the repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/aarnav-code/LeetSync.git
-cd LeetSync/backend
+cd LeetSync
 ```
 
-Adjust the directory change if you clone the backend repository directly rather than the parent repository.
-
-### 2. Create the database
+### 2. Create the Database
 
 Create a PostgreSQL database named `leetsync`.
 
@@ -194,18 +156,18 @@ Create a PostgreSQL database named `leetsync`.
 CREATE DATABASE leetsync;
 ```
 
-### 3. Configure environment variables
+### 3. Configure Database Credentials
 
-Configure these environment variables before starting the application:
+Configure the environment variables expected by the application:
 
 ```text
 DB_USERNAME=your_postgres_username
 DB_PASSWORD=your_postgres_password
 ```
 
-The application reads these values from the environment rather than storing database credentials in `application.yml`.
+Use the database settings configured in `src/main/resources/application.yml`. Never commit database credentials or GitHub access tokens to the repository.
 
-### 4. Start the backend
+### 4. Start the Backend
 
 On Windows:
 
@@ -219,9 +181,19 @@ On macOS or Linux:
 ./gradlew bootRun
 ```
 
-The application is configured to listen on port `8080`.
+The backend is configured to listen on port `8080` by default.
 
-### 5. Run tests
+### 5. Load the Chrome Extension
+
+1. Open `chrome://extensions` in Chrome.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the directory containing the extension's `manifest.json`.
+5. Open LeetCode and test the extension on a submission page.
+
+Ensure that the backend is running and the extension is configured to communicate with it.
+
+### 6. Run Backend Tests
 
 On Windows:
 
@@ -235,51 +207,29 @@ On macOS or Linux:
 ./gradlew test
 ```
 
-## Configuration
-
-The main application configuration is located at:
-
-`src/main/resources/application.yml`
-
-Relevant settings include:
-
-* PostgreSQL connection details through environment variables.
-* Server port, defaulting to `8080`.
-* GitHub API base URL and user-agent configuration.
-* CORS origin patterns for browser-extension and local development clients.
-
 ## Current Status
 
-The project is focused on building the backend foundation for automated coding-submission synchronization.
+### Implemented
 
-**Implemented in the current backend:**
+* LeetCode browser extension integration.
+* Submission code and verdict retrieval.
+* Accepted-submission filtering.
+* Spring Boot synchronization backend.
+* GitHub repository synchronization and automatic commits.
+* Organized solution directories.
+* Duplicate-solution handling.
 
-* REST endpoints for solution management and submission synchronization.
-* GitHub repository and file operations.
-* Solution formatting and metadata generation.
-* Duplicate-code checks and performance-based update logic.
-* Per-problem README generation and root solved-problem statistics.
+### Future Improvements
 
-**Planned next:**
-
-* Build the browser extension interface.
-* Detect accepted submissions on supported coding platforms.
-* Extract solution code and submission metadata from platform pages.
-* Connect the extension to the backend.
-* Improve user-facing error handling and authentication recovery.
+* Support for additional coding platforms, including Codeforces and GeeksforGeeks.
+* Additional runtime and memory performance metadata.
+* Improved configuration and user-facing error handling.
+* Expanded automated testing and documentation.
 
 ## Contributing
 
-Suggestions, bug reports, and improvements are welcome. As the project evolves, the goal is to make saving and organizing coding solutions on GitHub as seamless as possible.
+Suggestions, bug reports, and improvements are welcome. LeetSync aims to make saving and organizing coding solutions on GitHub simpler and more consistent.
 
 ---
 
-*LeetSync is a work in progress.*
-
-<!-- LEETSYNC:COUNTED:LEETCODE:7 -->
-
-<!-- LEETSYNC:COUNTED:LEETCODE:220 -->
-
-<!-- LEETSYNC:COUNTED:LEETCODE:50 -->
-
-<!-- LEETSYNC:COUNTED:LEETCODE:445 -->
+*LeetSync is an ongoing project.*
