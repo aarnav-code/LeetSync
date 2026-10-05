@@ -1,7 +1,7 @@
 
 ### Test 1: Create a new accepted submission
 POST http://localhost:8080/api/sync/submission
-Authorization: Bearer {{$dotenv GITHUB_TOKEN}}
+Authorization: Bearer {{GITHUB_TOKEN}}
 X-GitHub-Owner: aarnav-code
 Content-Type: application/json
 

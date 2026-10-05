@@ -201,6 +201,17 @@ public class GitHubSyncService {
                         token, owner, repo, branch,
                         verifiedRootReadme, request
                 );
+
+                GitHubContentsResponse pendingReadme =
+                        githubClient.getFile(
+                                token, owner, repo,
+                                problemReadmePath, branch
+                        );
+
+                removePendingMarker(
+                        token, owner, repo, request,
+                        branch, pendingReadme
+                );
             }
 
             return new SyncResponse(
@@ -214,6 +225,17 @@ public class GitHubSyncService {
             updateRootReadme(
                     token, owner, repo, branch,
                     verifiedRootReadme, request
+            );
+
+            GitHubContentsResponse pendingReadme =
+                    githubClient.getFile(
+                            token, owner, repo,
+                            problemReadmePath, branch
+                    );
+
+            removePendingMarker(
+                    token, owner, repo, request,
+                    branch, pendingReadme
             );
         }
 
@@ -356,6 +378,49 @@ public class GitHubSyncService {
 
         githubClient.putFile(
                 token, owner, repo, path, putRequest
+        );
+    }
+
+    private void removePendingMarker(
+            String token,
+            String owner,
+            String repo,
+            SubmissionRequest request,
+            String branch,
+            GitHubContentsResponse existingReadme
+    ) {
+        if (existingReadme == null
+                || existingReadme.content() == null
+                || existingReadme.sha() == null) {
+            return;
+        }
+
+        String content = decode(existingReadme.content());
+        String marker = pendingProblemMarker(request);
+
+        if (!content.contains(marker)) {
+            return;
+        }
+
+        content = content.replace(marker, "").stripTrailing() + "\n";
+
+        GitHubPutFileRequest putRequest =
+                new GitHubPutFileRequest(
+                        "Complete sync recovery: "
+                                + request.problemId()
+                                + ". "
+                                + request.problemTitle(),
+                        encode(content),
+                        branch,
+                        existingReadme.sha()
+                );
+
+        githubClient.putFile(
+                token,
+                owner,
+                repo,
+                codeFileService.problemReadmePath(request),
+                putRequest
         );
     }
 

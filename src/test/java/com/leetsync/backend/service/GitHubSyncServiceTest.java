@@ -663,5 +663,39 @@ class GitHubSyncServiceTest {
                 eq(token), eq(owner), eq(repo),
                 eq("README.md"), any()
         );
+
+        verify(githubClient).putFile(
+                eq(token),
+                eq(owner),
+                eq(repo),
+                eq("README.md"),
+                argThat(file -> {
+                    String updatedReadme = decode(file.content());
+                    return updatedReadme.contains("Global stats: 6 Problems Solved")
+                            && updatedReadme.contains(
+                            "<!-- LEETSYNC:COUNTED:LEETCODE:7 -->"
+                    );
+                })
+        );
+
+        verify(githubClient, never()).putFile(
+                eq(token),
+                eq(owner),
+                eq(repo),
+                eq(solutionPath),
+                any()
+        );
+
+        verify(githubClient).putFile(
+                eq(token),
+                eq(owner),
+                eq(repo),
+                eq(problemReadmePath),
+                argThat(file ->
+                        !decode(file.content()).contains(
+                                "<!-- LEETSYNC:PENDING:LEETCODE:7 -->"
+                        )
+                )
+        );
     }
 }
