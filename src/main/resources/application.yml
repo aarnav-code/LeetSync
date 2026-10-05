@@ -23,7 +23,7 @@ server:
 
 app:
   cors:
-    allowed-origin-patterns: "chrome-extension://*,http://localhost:3000,http://localhost:5173"
+    allowed-origin-patterns: "fgjmmopppjdfipibiliohhhoebjifmia"
 
   github:
     api-base-url: "https://api.github.com"
