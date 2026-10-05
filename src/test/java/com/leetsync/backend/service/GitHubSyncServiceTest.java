@@ -10,12 +10,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -44,7 +45,7 @@ class GitHubSyncServiceTest {
                 formatter
         );
 
-        when(githubClient.getRepository(token, owner, repo))
+        lenient().when(githubClient.getRepository(token, owner, repo))
                 .thenReturn(new GitHubRepositoryResponse(
                         repo, branch, false, false, "private", null
                 ));
@@ -237,7 +238,10 @@ class GitHubSyncServiceTest {
         String expectedRootReadme = originalRootReadme.replace(
                 "Global stats: 1 Problem Solved",
                 "Global stats: 2 Problems Solved"
-        );
+        ).stripTrailing()
+                + "\n\n"
+                + "<!-- LEETSYNC:COUNTED:LEETCODE:2 -->"
+                + "\n";
 
         verify(githubClient).putFile(
                 eq(token), eq(owner), eq(repo),
@@ -427,6 +431,237 @@ class GitHubSyncServiceTest {
         assertThrows(
                 WebClientResponseException.class,
                 () -> service.sync(token, owner, request)
+        );
+    }
+
+    @Test
+    void skipsCreatingDuplicateWhenLegacySolutionAlreadyExists() {
+        SubmissionRequest request =
+                request("1", "Two Sum", "class Solution {}");
+
+        String legacyPath = "0001-two-sum/solution.java";
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                contains("solution.java"), eq(branch)
+        )).thenReturn(null);
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                argThat(path -> legacyPath.equals(path)),
+                eq(branch)
+        )).thenReturn(new GitHubContentsResponse(
+                encode("class Solution {}"),
+                "legacy-solution-sha",
+                legacyPath
+        ));
+
+        SyncResponse response = service.sync(token, owner, request);
+
+        assertEquals("SKIPPED", response.status());
+        assertEquals(legacyPath, response.path());
+
+        verify(githubClient, never()).putFile(
+                eq(token), eq(owner), eq(repo), anyString(), any()
+        );
+    }
+
+    @Test
+    void retriesAfterRootReadmeWriteFails() {
+        SubmissionRequest request =
+                request("6", "Retry Test Problem", "class Solution {}");
+
+        mockMissingSolutionAndProblemReadme();
+
+        mockRootReadme(
+                encode("# LeetSync\n\nGlobal stats: 5 Problems Solved\n"),
+                "root-readme-sha",
+                "README.md"
+        );
+
+        doAnswer(invocation -> {
+            String path = invocation.getArgument(3);
+
+            if ("README.md".equals(path)) {
+                throw WebClientResponseException.create(
+                        502,
+                        "Bad Gateway",
+                        org.springframework.http.HttpHeaders.EMPTY,
+                        new byte[0],
+                        StandardCharsets.UTF_8
+                );
+            }
+
+            return new GitHubPutFileResponse(
+                    new GitHubPutFileResponse.Commit("test-sha")
+            );
+        }).when(githubClient).putFile(
+                eq(token), eq(owner), eq(repo), anyString(), any()
+        );
+
+        assertThrows(
+                WebClientResponseException.class,
+                () -> service.sync(token, owner, request)
+        );
+    }
+
+    @Test
+    void rejectsSubmissionWhenAcceptedIsFalse() {
+        SubmissionRequest request =
+                new SubmissionRequest(
+                        SubmissionRequest.Source.LEETCODE,
+                        "1",
+                        "Two Sum",
+                        "Java",
+                        "class Solution {}",
+                        repo,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        false
+                );
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        assertEquals("NOT_ACCEPTED", exception.getCode());
+        verifyNoWrites();
+    }
+
+    @Test
+    void rejectsSubmissionWhenAcceptedIsNull() {
+        SubmissionRequest request =
+                new SubmissionRequest(
+                        SubmissionRequest.Source.LEETCODE,
+                        "1",
+                        "Two Sum",
+                        "Java",
+                        "class Solution {}",
+                        repo,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                );
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        assertEquals("NOT_ACCEPTED", exception.getCode());
+        verifyNoWrites();
+    }
+
+    @Test
+    void retriesRootReadmeUpdateAfterPartialSyncFailure() {
+        SubmissionRequest request =
+                request("7", "Retry Recovery Test", "class Solution {}");
+
+        String solutionPath =
+                codeFileService.path(request);
+
+        String problemReadmePath =
+                codeFileService.problemReadmePath(request);
+
+        String originalRootContent =
+                "# LeetSync\n\nGlobal stats: 5 Problems Solved\n";
+
+        // First attempt: solution and problem README do not exist.
+        mockMissingSolutionAndProblemReadme();
+
+        mockRootReadme(
+                encode(originalRootContent),
+                "root-readme-sha",
+                "README.md"
+        );
+
+        when(githubClient.putFile(
+                eq(token), eq(owner), eq(repo),
+                eq(solutionPath), any()
+        )).thenReturn(new GitHubPutFileResponse(
+                new GitHubPutFileResponse.Commit("solution-sha")
+        ));
+
+        when(githubClient.putFile(
+                eq(token), eq(owner), eq(repo),
+                eq(problemReadmePath), any()
+        )).thenReturn(new GitHubPutFileResponse(
+                new GitHubPutFileResponse.Commit("problem-readme-sha")
+        ));
+
+        when(githubClient.putFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), any()
+        )).thenThrow(
+                WebClientResponseException.create(
+                        502,
+                        "Bad Gateway",
+                        org.springframework.http.HttpHeaders.EMPTY,
+                        new byte[0],
+                        StandardCharsets.UTF_8
+                )
+        );
+
+        assertThrows(
+                WebClientResponseException.class,
+                () -> service.sync(token, owner, request)
+        );
+
+        // Retry: the solution and problem README now exist.
+        reset(githubClient);
+
+        when(githubClient.getRepository(token, owner, repo))
+                .thenReturn(new GitHubRepositoryResponse(
+                        repo, branch, false, false, "private", null
+                ));
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                eq(solutionPath), eq(branch)
+        )).thenReturn(new GitHubContentsResponse(
+                encode(formatter.format(request)),
+                "solution-sha",
+                solutionPath
+        ));
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                eq(problemReadmePath), eq(branch)
+        )).thenReturn(new GitHubContentsResponse(
+                encode(
+                        "# 7. Retry Recovery Test\n\n"
+                                + "- Source: LEETCODE\n"
+                                + "- Language: Java\n\n"
+                                + "<!-- LEETSYNC:PENDING:LEETCODE:7 -->\n"
+                ),
+                "problem-readme-sha",
+                problemReadmePath
+        ));
+
+        when(githubClient.getFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), eq(branch)
+        )).thenReturn(new GitHubContentsResponse(
+                encode(originalRootContent),
+                "root-readme-sha",
+                "README.md"
+        ));
+
+        SyncResponse retryResponse =
+                service.sync(token, owner, request);
+
+        assertEquals("SKIPPED", retryResponse.status());
+
+        verify(githubClient, times(1)).putFile(
+                eq(token), eq(owner), eq(repo),
+                eq("README.md"), any()
         );
     }
 }

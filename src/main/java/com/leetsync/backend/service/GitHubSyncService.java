@@ -1,8 +1,10 @@
+
 package com.leetsync.backend.service;
 
 import com.leetsync.backend.dto.*;
 import com.leetsync.backend.exception.ApiException;
 import com.leetsync.backend.github.GitHubClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -17,15 +19,32 @@ public class GitHubSyncService {
     private final GitHubClient githubClient;
     private final CodeFileService codeFileService;
     private final SubmissionFormatter formatter;
+    private final GitHubPathService legacyPathService;
+
+    @Autowired
+    public GitHubSyncService(
+            GitHubClient githubClient,
+            CodeFileService codeFileService,
+            SubmissionFormatter formatter,
+            GitHubPathService legacyPathService
+    ) {
+        this.githubClient = githubClient;
+        this.codeFileService = codeFileService;
+        this.formatter = formatter;
+        this.legacyPathService = legacyPathService;
+    }
 
     public GitHubSyncService(
             GitHubClient githubClient,
             CodeFileService codeFileService,
             SubmissionFormatter formatter
     ) {
-        this.githubClient = githubClient;
-        this.codeFileService = codeFileService;
-        this.formatter = formatter;
+        this(
+                githubClient,
+                codeFileService,
+                formatter,
+                new GitHubPathService()
+        );
     }
 
     public SyncResponse sync(
@@ -33,13 +52,11 @@ public class GitHubSyncService {
             String owner,
             SubmissionRequest request
     ) {
-
-        // Only accepted submissions should reach GitHub.
-        if (request.accepted() != null && !request.accepted()) {
+        if (!Boolean.TRUE.equals(request.accepted())) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "NOT_ACCEPTED",
-                    "Only accepted submissions can be synchronized."
+                    "Only confirmed accepted submissions can be synchronized."
             );
         }
 
@@ -54,7 +71,6 @@ public class GitHubSyncService {
 
         String repo = request.repository();
 
-        // Verify the repository and determine the target branch.
         GitHubRepositoryResponse repository =
                 githubClient.getRepository(token, owner, repo);
 
@@ -63,39 +79,71 @@ public class GitHubSyncService {
                 ? repository.defaultBranch()
                 : request.branch();
 
-        // Generate paths for this problem.
         String solutionPath = codeFileService.path(request);
         String problemReadmePath =
                 codeFileService.problemReadmePath(request);
 
-        // Check both files independently.
         GitHubContentsResponse existingSolution =
                 githubClient.getFile(
                         token, owner, repo, solutionPath, branch
                 );
 
+        boolean solutionExists =
+                existingSolution != null
+                        && existingSolution.content() != null;
+
+        // Never create a duplicate of an existing legacy LeetCode solution.
+        if (!solutionExists) {
+            String legacySolutionPath = getLegacySolutionPath(request);
+
+            if (legacySolutionPath != null
+                    && !legacySolutionPath.equals(solutionPath)) {
+                GitHubContentsResponse legacySolution =
+                        githubClient.getFile(
+                                token, owner, repo,
+                                legacySolutionPath, branch
+                        );
+
+                if (legacySolution != null
+                        && legacySolution.content() != null) {
+                    return SyncResponse.skipped(
+                            "A solution already exists at the legacy path: "
+                                    + legacySolutionPath
+                                    + ". No duplicate file was created. "
+                                    + "The existing file was left unchanged.",
+                            legacySolutionPath
+                    );
+                }
+            }
+        }
+
         GitHubContentsResponse existingProblemReadme =
                 githubClient.getFile(
-                        token, owner, repo, problemReadmePath, branch
+                        token, owner, repo,
+                        problemReadmePath, branch
                 );
 
-        boolean solutionExists = existingSolution != null
-                && existingSolution.content() != null;
+        boolean problemReadmeExists =
+                existingProblemReadme != null
+                        && existingProblemReadme.content() != null;
 
-        boolean problemReadmeExists = existingProblemReadme != null
-                && existingProblemReadme.content() != null;
+        String pendingMarker = pendingProblemMarker(request);
 
-        // A problem is new only when neither file exists.
+        // This marker survives a partial failure and makes retry recovery possible.
+        boolean pendingCount = problemReadmeExists
+                && decode(existingProblemReadme.content())
+                .contains(pendingMarker);
+
         boolean isNewProblem =
                 !solutionExists && !problemReadmeExists;
 
-        /*
-         * Verify the root README before creating files for a new
-         * problem. Reuse this exact response for the later update.
-         */
+        boolean shouldCountProblem = isNewProblem || pendingCount;
+
         GitHubContentsResponse verifiedRootReadme = null;
 
-        if (isNewProblem) {
+        // Verify the root README before making any writes for a new
+        // problem or resuming an interrupted global-stat update.
+        if (shouldCountProblem) {
             verifiedRootReadme = verifyRootReadme(
                     token, owner, repo, branch
             );
@@ -103,10 +151,34 @@ public class GitHubSyncService {
 
         String formattedCode = formatter.format(request);
 
-        // Handle a missing solution file.
+        // Create a missing solution.
         if (!solutionExists) {
-
             String message = buildCommitMessage(request, false);
+
+            if (shouldCountProblem && !pendingCount) {
+                String readmeContent =
+                        "# " + request.problemId()
+                                + ". " + request.problemTitle()
+                                + "\n\n"
+                                + "- Source: " + request.source() + "\n"
+                                + "- Language: " + request.language() + "\n\n"
+                                + pendingMarker + "\n";
+
+                GitHubPutFileRequest readmeRequest =
+                        new GitHubPutFileRequest(
+                                "Prepare sync: " + request.problemTitle(),
+                                encode(readmeContent),
+                                branch,
+                                existingProblemReadme == null
+                                        ? null : existingProblemReadme.sha()
+                        );
+
+                // Persist the recovery marker before creating the solution.
+                githubClient.putFile(
+                        token, owner, repo,
+                        problemReadmePath, readmeRequest
+                );
+            }
 
             GitHubPutFileRequest putRequest =
                     new GitHubPutFileRequest(
@@ -118,69 +190,44 @@ public class GitHubSyncService {
 
             GitHubPutFileResponse result =
                     githubClient.putFile(
-                            token,
-                            owner,
-                            repo,
-                            solutionPath,
-                            putRequest
+                            token, owner, repo, solutionPath, putRequest
                     );
 
             String sha = extractCommitSha(result);
 
-            // Create or repair the problem README independently.
-            if (!problemReadmeExists) {
-                createOrUpdateProblemReadme(
-                        token,
-                        owner,
-                        repo,
-                        request,
-                        branch,
-                        existingProblemReadme
-                );
-            }
-
-            // Increment the count only for a genuinely new problem.
-            if (isNewProblem) {
+            // The counted marker makes this operation idempotent on retries.
+            if (shouldCountProblem) {
                 updateRootReadme(
-                        token,
-                        owner,
-                        repo,
-                        branch,
-                        verifiedRootReadme
+                        token, owner, repo, branch,
+                        verifiedRootReadme, request
                 );
             }
 
             return new SyncResponse(
-                    "CREATED",
-                    message,
-                    solutionPath,
-                    sha,
-                    true
+                    "CREATED", message, solutionPath, sha, true
             );
         }
 
-        // Decode the existing solution file.
-        String existingFile = decode(existingSolution.content());
+        // If a previous sync created the solution but failed while
+        // updating global stats, finish that update before returning.
+        if (pendingCount) {
+            updateRootReadme(
+                    token, owner, repo, branch,
+                    verifiedRootReadme, request
+            );
+        }
 
+        String existingFile = decode(existingSolution.content());
         String existingCode = formatter.extractCode(existingFile);
 
-        /*
-         * Repair a missing problem README before any early return.
-         * This also handles identical solutions without creating
-         * another solution commit.
-         */
+        // Repair a missing problem README without duplicating the solution.
         if (!problemReadmeExists) {
             createOrUpdateProblemReadme(
-                    token,
-                    owner,
-                    repo,
-                    request,
-                    branch,
-                    existingProblemReadme
+                    token, owner, repo, request,
+                    branch, existingProblemReadme
             );
         }
 
-        // Identical source code must not create a duplicate commit.
         if (existingCode.equals(normalizeCode(request.code()))) {
             return SyncResponse.skipped(
                     "Exact same solution already exists; "
@@ -189,14 +236,6 @@ public class GitHubSyncService {
             );
         }
 
-        /*
-         * If performance information is available, only replace the
-         * existing solution when the new solution is demonstrably
-         * better based on the available metrics.
-         *
-         * If no performance information is available, allow the
-         * different solution to be stored.
-         */
         boolean shouldUpdate =
                 shouldUpdateSolution(request, existingFile);
 
@@ -220,35 +259,62 @@ public class GitHubSyncService {
 
         GitHubPutFileResponse result =
                 githubClient.putFile(
-                        token,
-                        owner,
-                        repo,
-                        solutionPath,
-                        putRequest
+                        token, owner, repo, solutionPath, putRequest
                 );
 
         String sha = extractCommitSha(result);
 
-        // Existing problems never increase the global solved count.
-        // Update their README only when it already existed.
         if (problemReadmeExists) {
             createOrUpdateProblemReadme(
-                    token,
-                    owner,
-                    repo,
-                    request,
-                    branch,
-                    existingProblemReadme
+                    token, owner, repo, request,
+                    branch, existingProblemReadme
             );
         }
 
         return new SyncResponse(
-                "UPDATED",
-                message,
-                solutionPath,
-                sha,
-                true
+                "UPDATED", message, solutionPath, sha, true
         );
+    }
+
+    private String getLegacySolutionPath(
+            SubmissionRequest request
+    ) {
+        if (request.source() != SubmissionRequest.Source.LEETCODE) {
+            return null;
+        }
+
+        String numericId =
+                request.problemId().replaceAll("\\D", "");
+
+        if (numericId.isBlank()) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_PROBLEM_ID",
+                    "The LeetCode problem ID must contain a number."
+            );
+        }
+
+        try {
+            int problemNumber = Integer.parseInt(numericId);
+
+            return legacyPathService.generatePath(
+                    problemNumber,
+                    request.problemTitle(),
+                    request.language()
+            );
+        } catch (NumberFormatException exception) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_PROBLEM_ID",
+                    "The LeetCode problem ID is outside the supported range."
+            );
+        } catch (IllegalArgumentException exception) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "UNSUPPORTED_LANGUAGE",
+                    exception.getMessage()
+            );
+        }
     }
 
     private void createOrUpdateProblemReadme(
@@ -261,13 +327,20 @@ public class GitHubSyncService {
     ) {
         String path = codeFileService.problemReadmePath(request);
 
-        String content = "# "
-                + request.problemId()
-                + ". "
-                + request.problemTitle()
-                + "\n\n"
-                + "- Source: " + request.source() + "\n"
-                + "- Language: " + request.language() + "\n";
+        String content;
+
+        if (existingReadme != null
+                && existingReadme.content() != null) {
+            content = decode(existingReadme.content());
+        } else {
+            content = "# "
+                    + request.problemId()
+                    + ". "
+                    + request.problemTitle()
+                    + "\n\n"
+                    + "- Source: " + request.source() + "\n"
+                    + "- Language: " + request.language() + "\n";
+        }
 
         GitHubPutFileRequest putRequest =
                 new GitHubPutFileRequest(
@@ -278,16 +351,11 @@ public class GitHubSyncService {
                         encode(content),
                         branch,
                         existingReadme == null
-                                ? null
-                                : existingReadme.sha()
+                                ? null : existingReadme.sha()
                 );
 
         githubClient.putFile(
-                token,
-                owner,
-                repo,
-                path,
-                putRequest
+                token, owner, repo, path, putRequest
         );
     }
 
@@ -316,7 +384,6 @@ public class GitHubSyncService {
             );
         }
 
-        // Ensure the returned content is valid Base64 before proceeding.
         try {
             decode(rootReadme.content());
         } catch (IllegalArgumentException exception) {
@@ -331,15 +398,44 @@ public class GitHubSyncService {
         return rootReadme;
     }
 
+    private String countedProblemMarker(SubmissionRequest request) {
+        String problemId = request.problemId()
+                .replaceAll("[^a-zA-Z0-9_-]", "_");
+
+        return "<!-- LEETSYNC:COUNTED:"
+                + request.source()
+                + ":"
+                + problemId
+                + " -->";
+    }
+
+    private String pendingProblemMarker(SubmissionRequest request) {
+        String problemId = request.problemId()
+                .replaceAll("[^a-zA-Z0-9_-]", "_");
+
+        return "<!-- LEETSYNC:PENDING:"
+                + request.source()
+                + ":"
+                + problemId
+                + " -->";
+    }
+
     private void updateRootReadme(
             String token,
             String owner,
             String repo,
             String branch,
-            GitHubContentsResponse existingRootReadme
+            GitHubContentsResponse existingRootReadme,
+            SubmissionRequest request
     ) {
-        // Use the already-verified response. Do not fetch the file again.
         String content = decode(existingRootReadme.content());
+        String marker = countedProblemMarker(request);
+
+        // If GitHub committed an earlier attempt but its response was lost,
+        // the marker prevents the problem count from being incremented again.
+        if (content.contains(marker)) {
+            return;
+        }
 
         Pattern pattern = Pattern.compile(
                 "Global stats:\\s*(\\d+)\\s+"
@@ -348,7 +444,6 @@ public class GitHubSyncService {
         );
 
         Matcher matcher = pattern.matcher(content);
-
         boolean statsExist = matcher.find();
 
         int solvedCount = statsExist
@@ -358,14 +453,10 @@ public class GitHubSyncService {
         solvedCount++;
 
         String problemWord = solvedCount == 1
-                ? "Problem"
-                : "Problems";
+                ? "Problem" : "Problems";
 
         String statsLine = "Global stats: "
-                + solvedCount
-                + " "
-                + problemWord
-                + " Solved";
+                + solvedCount + " " + problemWord + " Solved";
 
         matcher = pattern.matcher(content);
 
@@ -375,10 +466,11 @@ public class GitHubSyncService {
             );
         } else {
             content = content.stripTrailing()
-                    + "\n\n"
-                    + statsLine
-                    + "\n";
+                    + "\n\n" + statsLine + "\n";
         }
+
+        content = content.stripTrailing()
+                + "\n\n" + marker + "\n";
 
         GitHubPutFileRequest putRequest =
                 new GitHubPutFileRequest(
@@ -389,11 +481,7 @@ public class GitHubSyncService {
                 );
 
         githubClient.putFile(
-                token,
-                owner,
-                repo,
-                "README.md",
-                putRequest
+                token, owner, repo, "README.md", putRequest
         );
     }
 
@@ -455,7 +543,10 @@ public class GitHubSyncService {
         return new Performance(runtime, memory);
     }
 
-    private Double extractPercentile(String file, String prefix) {
+    private Double extractPercentile(
+            String file,
+            String prefix
+    ) {
         for (String line : file.split("\n")) {
             if (!line.startsWith(prefix)) {
                 continue;
@@ -486,10 +577,9 @@ public class GitHubSyncService {
     }
 
     private String encode(String value) {
-        return Base64.getEncoder()
-                .encodeToString(
-                        value.getBytes(StandardCharsets.UTF_8)
-                );
+        return Base64.getEncoder().encodeToString(
+                value.getBytes(StandardCharsets.UTF_8)
+        );
     }
 
     private String decode(String base64) {
@@ -508,14 +598,14 @@ public class GitHubSyncService {
         String verb = update ? "Updated" : "Solved";
 
         return "Auto-commit: "
-                + verb
-                + " "
-                + request.problemId()
-                + ". "
+                + verb + " "
+                + request.problemId() + ". "
                 + request.problemTitle();
     }
 
-    private String extractCommitSha(GitHubPutFileResponse result) {
+    private String extractCommitSha(
+            GitHubPutFileResponse result
+    ) {
         if (result == null || result.commit() == null) {
             return null;
         }

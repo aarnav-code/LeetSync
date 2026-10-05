@@ -12,6 +12,9 @@ import com.leetsync.backend.dto.GitHubRepositoryResponse;
 import com.leetsync.backend.dto.GitHubUserResponse;
 import com.leetsync.backend.service.GitHubService;
 import com.leetsync.backend.dto.GitHubSolutionRequest;
+import com.leetsync.backend.dto.SubmissionRequest;
+import com.leetsync.backend.dto.SyncResponse;
+import com.leetsync.backend.service.GitHubSyncService;
 
 import jakarta.validation.Valid;
 
@@ -24,13 +27,16 @@ public class SolutionController {
 
     private final SolutionService solutionService;
     private final GitHubService gitHubService;
+    private final GitHubSyncService gitHubSyncService;
 
     public SolutionController(
             SolutionService solutionService,
-            GitHubService gitHubService
+            GitHubService gitHubService,
+            GitHubSyncService gitHubSyncService
     ) {
         this.solutionService = solutionService;
         this.gitHubService = gitHubService;
+        this.gitHubSyncService = gitHubSyncService;
     }
 
     @PostMapping
@@ -136,7 +142,7 @@ public class SolutionController {
     }
 
     @PostMapping("/github/sync/{owner}/{repo}")
-    public GitHubPutFileResponse syncSolution(
+    public SyncResponse syncSolution(
             @RequestHeader("Authorization") String authorization,
             @PathVariable String owner,
             @PathVariable String repo,
@@ -144,11 +150,21 @@ public class SolutionController {
     ) {
         String token = authorization.replace("Bearer ", "");
 
-        return gitHubService.syncSolution(
-                token,
-                owner,
+        SubmissionRequest submission = new SubmissionRequest(
+                SubmissionRequest.Source.LEETCODE,
+                String.valueOf(request.getProblemNumber()),
+                request.getProblemTitle(),
+                request.getLanguage(),
+                request.getCode(),
                 repo,
-                request
+                null,
+                null,
+                null,
+                null,
+                null,
+                true
         );
+
+        return gitHubSyncService.sync(token, owner, submission);
     }
 }

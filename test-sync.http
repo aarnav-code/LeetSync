@@ -1,0 +1,20 @@
+
+### Test 1: Create a new accepted submission
+POST http://localhost:8080/api/sync/submission
+Authorization: Bearer {{$dotenv GITHUB_TOKEN}}
+X-GitHub-Owner: aarnav-code
+Content-Type: application/json
+
+{
+  "source": "LEETCODE",
+  "problemId": "999001",
+  "problemTitle": "LeetSync Integration Test",
+  "language": "Java",
+  "code": "public class Solution {\n    public int add(int a, int b) {\n        return a + b;\n    }\n}",
+  "repository": "LeetSync",
+  "accepted": true,
+  "runtime": "1 ms",
+  "runtimePercentile": 90.0,
+  "memory": "40 MB",
+  "memoryPercentile": 80.0
+}
