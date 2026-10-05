@@ -148,7 +148,7 @@ GeeksforGeeks Solutions/
     └── README.md
 ```
 
-Global stats: 4 Problems Solved
+Global stats: 5 Problems Solved
 The examples illustrate the directory layout; actual filenames and extensions depend on the problem and programming language.
 
 ### Supported language extensions
@@ -281,3 +281,5 @@ Suggestions, bug reports, and improvements are welcome. As the project evolves, 
 <!-- LEETSYNC:COUNTED:LEETCODE:220 -->
 
 <!-- LEETSYNC:COUNTED:LEETCODE:50 -->
+
+<!-- LEETSYNC:COUNTED:LEETCODE:445 -->
