@@ -8,6 +8,7 @@ Instead of manually copying solutions after solving a problem, LeetSync retrieve
 
 **LeetSync in Action**
 See how LeetSync detects an accepted LeetCode submission and automatically synchronizes the solution to GitHub.
+
 🎥 [**Watch the LeetSync Demo**](https://drive.google.com/file/d/1XItRtKNN_bKIWTySMhmJvjgNZJgoxyqW/view?usp=sharing)
 
 ## Features
