@@ -162,7 +162,7 @@ public class SolutionController {
                 null,
                 null,
                 null,
-                true
+                request.getAccepted()
         );
 
         return gitHubSyncService.sync(token, owner, submission);

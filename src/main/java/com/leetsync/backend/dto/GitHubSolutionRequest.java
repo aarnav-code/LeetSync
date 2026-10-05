@@ -19,6 +19,9 @@ public class GitHubSolutionRequest {
     @NotBlank
     private String code;
 
+    @NotNull
+    private Boolean accepted;
+
     public Integer getProblemNumber() {
         return problemNumber;
     }
@@ -49,5 +52,13 @@ public class GitHubSolutionRequest {
 
     public void setCode(String code) {
         this.code = code;
+    }
+
+    public Boolean getAccepted() {
+        return accepted;
+    }
+
+    public void setAccepted(Boolean accepted) {
+        this.accepted = accepted;
     }
 }
