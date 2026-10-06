@@ -1,0 +1,6 @@
+# 34. Find First and Last Position of Element in Sorted Array
+
+- Source: LEETCODE
+- Language: java
+
+<!-- LEETSYNC:PENDING:LEETCODE:34 -->
