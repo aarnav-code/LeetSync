@@ -232,3 +232,7 @@ Suggestions, bug reports, and improvements are welcome. LeetSync aims to make sa
 ---
 
 *LeetSync is an ongoing project.*
+
+Global stats: 1 Problem Solved
+
+<!-- LEETSYNC:COUNTED:LEETCODE:34 -->
